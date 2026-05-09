@@ -228,6 +228,29 @@ export function parseNotifySendOutputLine(
   return null
 }
 
+async function sendWSLWindowsNotification(title: string, message: string): Promise<void> {
+  return new Promise((resolve) => {
+    const escapedTitle = title.replace(/'/g, "''")
+    const escapedMessage = message.replace(/'/g, "''")
+    const script = [
+      "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null",
+      "$template = [Windows.UI.Notifications.ToastTemplateType]::ToastText02",
+      "$xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent($template)",
+      "$text = $xml.GetElementsByTagName('text')",
+      `$text[0].AppendChild($xml.CreateTextNode('${escapedTitle}')) | Out-Null`,
+      `$text[1].AppendChild($xml.CreateTextNode('${escapedMessage}')) | Out-Null`,
+      "$toast = [Windows.UI.Notifications.ToastNotification]::new($xml)",
+      "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('OpenCode').Show($toast)",
+    ].join("; ")
+
+    const proc = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+      stdio: "ignore",
+    })
+    proc.on("close", () => resolve())
+    proc.on("error", () => resolve())
+  })
+}
+
 export async function sendNotification(
   title: string,
   message: string,
@@ -281,6 +304,11 @@ export async function sendNotification(
         }
       )
     })
+  }
+
+  if (isWsl) {
+    await sendWSLWindowsNotification(title, message)
+    return
   }
 
   if ((platform === "Linux" || platform.match(/BSD$/)) && !isWsl) {

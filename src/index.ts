@@ -29,6 +29,7 @@ const sessionIdleSequence = new Map<string, number>()
 const sessionErrorSuppressionAt = new Map<string, number>()
 const sessionLastBusyAt = new Map<string, number>()
 const subagentSessionIds = new Set<string>()
+const sessionWatchdogTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 type UnknownRecord = Record<string, unknown>
 
@@ -256,6 +257,41 @@ function getMessageUpdatedInfo(event: unknown): MessageUpdatedInfo {
     role: getStringField(info, "role"),
     sessionID: getStringField(info, "sessionID"),
   }
+}
+
+function clearWatchdog(sessionID: string | null): void {
+  if (!sessionID) return
+  const timer = sessionWatchdogTimers.get(sessionID)
+  if (timer) {
+    clearTimeout(timer)
+    sessionWatchdogTimers.delete(sessionID)
+  }
+}
+
+function scheduleWatchdog(
+  sessionID: string,
+  projectName: string | null,
+  timeoutMs: number
+): void {
+  clearWatchdog(sessionID)
+  const timer = setTimeout(() => {
+    sessionWatchdogTimers.delete(sessionID)
+    const config = loadConfig()
+    if (config.watchdogTimeout <= 0) return
+    void handleEvent(config, "running_too_long", projectName, null, null, sessionID, null).catch(() => undefined)
+    // Re-arm so it keeps firing every interval until session ends
+    scheduleWatchdog(sessionID, projectName, timeoutMs)
+  }, timeoutMs)
+  sessionWatchdogTimers.set(sessionID, timer)
+}
+
+function maybeStartWatchdog(
+  sessionID: string,
+  projectName: string | null,
+  timeoutMs: number
+): void {
+  if (sessionWatchdogTimers.has(sessionID)) return
+  scheduleWatchdog(sessionID, projectName, timeoutMs)
 }
 
 function clearPendingIdleTimer(sessionID: string): void {
@@ -516,6 +552,7 @@ export const NotifierPlugin: Plugin = async ({ client, directory }) => {
       if (event.type === "session.deleted") {
         const info = getSessionLifecycleInfo(event)
         if (info.id) {
+          clearWatchdog(info.id)
           subagentSessionIds.delete(info.id)
         }
       }
@@ -530,6 +567,7 @@ export const NotifierPlugin: Plugin = async ({ client, directory }) => {
       if (event.type === "session.idle") {
         const sessionID = getSessionIDFromEvent(event)
         if (sessionID) {
+          clearWatchdog(sessionID)
           scheduleSessionIdle(client, config, projectName, event, sessionID)
         } else {
           await handleEventWithElapsedTime(client, config, "complete", projectName, event)
@@ -538,10 +576,15 @@ export const NotifierPlugin: Plugin = async ({ client, directory }) => {
 
       if (event.type === "session.status" && event.properties.status.type === "busy") {
         markSessionBusy(event.properties.sessionID)
+        const watchdogMs = config.watchdogTimeout * 60 * 1000
+        if (watchdogMs > 0) {
+          maybeStartWatchdog(event.properties.sessionID, projectName, watchdogMs)
+        }
       }
 
       if (event.type === "session.error") {
         const sessionID = getSessionIDFromEvent(event)
+        clearWatchdog(sessionID)
         markSessionError(sessionID)
         const eventType: EventType = event.properties.error?.name === "MessageAbortedError" ? "user_cancelled" : "error"
         let sessionTitle: string | null = null

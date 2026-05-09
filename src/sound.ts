@@ -3,6 +3,7 @@ import { join, dirname } from "path"
 import { fileURLToPath } from "url"
 import { existsSync } from "fs"
 import { spawn } from "child_process"
+import isWsl from "is-wsl"
 import type { EventType } from "./config"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -116,6 +117,26 @@ async function playOnWindows(soundPath: string): Promise<void> {
   await runCommand("powershell", ["-c", script, soundPath])
 }
 
+async function convertToWindowsPath(linuxPath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let output = ""
+    const proc = spawn("wslpath", ["-w", linuxPath], { stdio: ["ignore", "pipe", "ignore"] })
+    proc.stdout?.on("data", (chunk: Buffer) => { output += chunk.toString() })
+    proc.on("close", (code) => {
+      if (code === 0) resolve(output.trim())
+      else reject(new Error(`wslpath exited with code ${code}`))
+    })
+    proc.on("error", reject)
+  })
+}
+
+async function playOnWSL(soundPath: string): Promise<void> {
+  const windowsPath = await convertToWindowsPath(soundPath)
+  const escapedPath = windowsPath.replace(/'/g, "''")
+  const script = `& { (New-Object Media.SoundPlayer '${escapedPath}').PlaySync() }`
+  await runCommand("powershell.exe", ["-NoProfile", "-c", script])
+}
+
 export async function playSound(
   event: EventType,
   customPath: string | null,
@@ -142,7 +163,11 @@ export async function playSound(
         await playOnMac(soundPath, normalizedVolume)
         break
       case "linux":
-        await playOnLinux(soundPath, normalizedVolume)
+        if (isWsl) {
+          await playOnWSL(soundPath)
+        } else {
+          await playOnLinux(soundPath, normalizedVolume)
+        }
         break
       case "win32":
         await playOnWindows(soundPath)

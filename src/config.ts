@@ -4,7 +4,7 @@ import { homedir } from "os"
 import { fileURLToPath } from "url"
 import isWsl from "is-wsl"
 
-export type EventType = 
+export type EventType =
   | "permission"
   | "complete"
   | "subagent_complete"
@@ -16,6 +16,7 @@ export type EventType =
   | "session_started"
   | "user_message"
   | "client_connected"
+  | "running_too_long"
 
 export interface EventConfig {
   sound: boolean
@@ -58,6 +59,7 @@ export interface NotifierConfig {
   notificationSystem: "osascript" | "node-notifier" | "ghostty"
   linux: LinuxConfig
   minDuration: number
+  watchdogTimeout: number
   command: CommandConfig
   events: {
     permission: EventConfig
@@ -71,6 +73,7 @@ export interface NotifierConfig {
     session_started: EventConfig
     user_message: EventConfig
     client_connected: EventConfig
+    running_too_long: EventConfig
   }
   messages: {
     permission: string
@@ -84,6 +87,7 @@ export interface NotifierConfig {
     session_started: string
     user_message: string
     client_connected: string
+    running_too_long: string
   }
   sounds: {
     permission: string | null
@@ -97,6 +101,7 @@ export interface NotifierConfig {
     session_started: string | null
     user_message: string | null
     client_connected: string | null
+    running_too_long: string | null
   }
   volumes: {
     permission: number
@@ -110,6 +115,7 @@ export interface NotifierConfig {
     session_started: number
     user_message: number
     client_connected: number
+    running_too_long: number
   }
 }
 
@@ -137,6 +143,7 @@ const DEFAULT_CONFIG: NotifierConfig = {
     grouping: false,
   },
   minDuration: 0,
+  watchdogTimeout: 10,
   command: {
     enabled: false,
     path: "",
@@ -154,6 +161,7 @@ const DEFAULT_CONFIG: NotifierConfig = {
     session_started: { ...DEFAULT_EVENT_CONFIG, notification: false },
     user_message: { ...DEFAULT_EVENT_CONFIG, notification: false },
     client_connected: { ...DEFAULT_EVENT_CONFIG, notification: false },
+    running_too_long: { ...DEFAULT_EVENT_CONFIG },
   },
   messages: {
     permission: "Session needs permission: {sessionTitle}",
@@ -167,6 +175,7 @@ const DEFAULT_CONFIG: NotifierConfig = {
     session_started: "Session started: {sessionTitle}",
     user_message: "User sent a message: {sessionTitle}",
     client_connected: "OpenCode connected",
+    running_too_long: "Session still running: {sessionTitle}",
   },
   sounds: {
     permission: null,
@@ -180,6 +189,7 @@ const DEFAULT_CONFIG: NotifierConfig = {
     session_started: null,
     user_message: null,
     client_connected: null,
+    running_too_long: null,
   },
   volumes: {
     permission: 1,
@@ -193,6 +203,7 @@ const DEFAULT_CONFIG: NotifierConfig = {
     session_started: 1,
     user_message: 1,
     client_connected: 1,
+    running_too_long: 1,
   },
 }
 
@@ -311,6 +322,10 @@ export function loadConfig(): NotifierConfig {
         typeof userConfig.minDuration === "number" && Number.isFinite(userConfig.minDuration) && userConfig.minDuration >= 0
           ? userConfig.minDuration
           : DEFAULT_CONFIG.minDuration,
+      watchdogTimeout:
+        typeof userConfig.watchdogTimeout === "number" && Number.isFinite(userConfig.watchdogTimeout) && userConfig.watchdogTimeout >= 0
+          ? userConfig.watchdogTimeout
+          : DEFAULT_CONFIG.watchdogTimeout,
       command: {
         enabled: typeof userCommand.enabled === "boolean" ? userCommand.enabled : DEFAULT_CONFIG.command.enabled,
         path: typeof userCommand.path === "string" ? userCommand.path : DEFAULT_CONFIG.command.path,
@@ -329,6 +344,7 @@ export function loadConfig(): NotifierConfig {
         session_started: parseEventConfig(userConfig.events?.session_started ?? userConfig.session_started, { ...defaultWithGlobal, notification: false }),
         user_message: parseEventConfig(userConfig.events?.user_message ?? userConfig.user_message, { ...defaultWithGlobal, notification: false }),
         client_connected: parseEventConfig(userConfig.events?.client_connected ?? userConfig.client_connected, { ...defaultWithGlobal, notification: false }),
+        running_too_long: parseEventConfig(userConfig.events?.running_too_long ?? userConfig.running_too_long, defaultWithGlobal),
       },
       messages: {
         permission: userConfig.messages?.permission ?? DEFAULT_CONFIG.messages.permission,
@@ -342,6 +358,7 @@ export function loadConfig(): NotifierConfig {
         session_started: userConfig.messages?.session_started ?? DEFAULT_CONFIG.messages.session_started,
         user_message: userConfig.messages?.user_message ?? DEFAULT_CONFIG.messages.user_message,
         client_connected: userConfig.messages?.client_connected ?? DEFAULT_CONFIG.messages.client_connected,
+        running_too_long: userConfig.messages?.running_too_long ?? DEFAULT_CONFIG.messages.running_too_long,
       },
       sounds: {
         permission: userConfig.sounds?.permission ?? DEFAULT_CONFIG.sounds.permission,
@@ -355,6 +372,7 @@ export function loadConfig(): NotifierConfig {
         session_started: userConfig.sounds?.session_started ?? DEFAULT_CONFIG.sounds.session_started,
         user_message: userConfig.sounds?.user_message ?? DEFAULT_CONFIG.sounds.user_message,
         client_connected: userConfig.sounds?.client_connected ?? DEFAULT_CONFIG.sounds.client_connected,
+        running_too_long: userConfig.sounds?.running_too_long ?? DEFAULT_CONFIG.sounds.running_too_long,
       },
       volumes: {
         permission: parseVolume(userConfig.volumes?.permission, DEFAULT_CONFIG.volumes.permission),
@@ -371,6 +389,7 @@ export function loadConfig(): NotifierConfig {
         session_started: parseVolume(userConfig.volumes?.session_started, DEFAULT_CONFIG.volumes.session_started),
         user_message: parseVolume(userConfig.volumes?.user_message, DEFAULT_CONFIG.volumes.user_message),
         client_connected: parseVolume(userConfig.volumes?.client_connected, DEFAULT_CONFIG.volumes.client_connected),
+        running_too_long: parseVolume(userConfig.volumes?.running_too_long, DEFAULT_CONFIG.volumes.running_too_long),
       },
     }
   } catch {
